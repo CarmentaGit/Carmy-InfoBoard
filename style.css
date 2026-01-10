@@ -36,11 +36,16 @@
 /* Panel */
 #ibs-panel {
   position: absolute;
-  top: 72px;
+
+  /* Keep it away from top chrome */
+  top: calc(72px + env(safe-area-inset-top, 0px));
+
+  /* Keep it away from bottom navigation / ST controls */
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+
   right: 56px;
 
   width: 330px;
-  max-height: calc(100vh - 96px);
 
   border-radius: 14px;
   border: 1px solid rgba(255,255,255,0.08);
@@ -51,6 +56,7 @@
   box-shadow: 0 14px 44px rgba(0,0,0,0.45);
 
   overflow: hidden;
+
   transform: translateX(400px);
   opacity: 0;
   transition: transform 160ms ease, opacity 160ms ease;
@@ -116,8 +122,14 @@
 /* Content */
 .ibs-content {
   padding: 10px 12px 12px;
+
   overflow: auto;
-  max-height: calc(100vh - 150px);
+
+  /* Use dynamic viewport height so mobile chrome doesn't screw us */
+  max-height: calc(100dvh - 150px);
+
+  /* Extra scroll room so bottom-most fields aren't trapped under bars */
+  padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
 }
 
 .ibs-empty {
