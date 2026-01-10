@@ -61,7 +61,9 @@ Everything runs **locally in your browser**. No external requests.
 
 ### Auto-inject prompt
 
-When enabled, the extension automatically adds the InfoBoard instruction to outgoing generations, so you **don’t need to edit presets**. Th,s is suggested as in the current status, extension might not be suitable for all InfoBoard prompts.
+When enabled, the extension automatically adds the InfoBoard instruction to outgoing generations, so you **don’t need to edit presets**. This is suggested as in the current status, extension might not be suitable for all InfoBoard prompts.
+
+**Unless you want to use this, you can manually put the prompt from prompt.md into your own preset and turn this option off.**
 
 ---
 
