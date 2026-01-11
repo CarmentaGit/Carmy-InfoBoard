@@ -79,6 +79,104 @@ When enabled, the extension automatically adds the InfoBoard instruction to outg
 
 ---
 
+## ⚙️ Settings & Customization
+
+InfoBoard Sidebar can be fully customized **without writing any code**.  
+All options are available under **Settings (⚙)** and grouped into three tabs.
+
+---
+
+### 🧩 General
+
+Controls how the InfoBoard behaves.
+
+![General](https://i.ibb.co/jjQtCQj/General.jpg)
+
+- **Auto-inject prompt**  
+  Automatically adds InfoBoard instructions to each generation.  
+  *(Recommended – ON by default)*
+
+- **Inject role**  
+  Chooses how the prompt is sent to the model.  
+  - **System** (recommended)  
+  - **User** (use if system prompts are ignored)
+
+- **Hide board in chat**  
+  Hides the `<info_board>` block from chat and shows it only in the sidebar.
+
+- **Strip [brackets] around values**  
+  Removes outer brackets for a cleaner look.
+
+- **Extras section title**  
+  Name of the fallback section used **when the model outputs additional info**.
+
+---
+
+### 🧱 Layout
+
+Controls **what appears in the sidebar**.
+
+![Layout](https://i.ibb.co/HDqJmGNG/Layout.jpg)
+
+- **Categories**  
+  Visual sections such as *Presence*, *Mind*, *Connection*, or *World*.  
+  You can add, rename, delete, and reorder them.
+
+- **Infos**  
+  Individual data points inside categories (e.g. *Posture*, *Mood*, *Arousal*).  
+  Infos can be added, edited, reordered, or removed.
+
+- **Detected keys**  
+  Shows keys detected from the model’s output.  
+  Click one to instantly add it to the current category.
+
+---
+
+### ➕ Add / Edit Info
+
+When adding or editing an Info:
+
+![Add Info](https://i.ibb.co/HTx8qrST/Add-info.jpg)
+
+- **Key**  
+  Must match what the model outputs (e.g. `Posture`, `Mood`).
+
+- **Label (optional)**  
+  Display name shown in the sidebar (cosmetic only).
+
+- **Display type**  
+  Controls how the info is shown:
+  - **Text**
+  - **Text + Bar**
+  - **Bar only**
+  - **Chips** (comma-separated values)
+  - **Monospace (thought)**
+
+- **Subtle text**  
+  Displays the value in a softer color.
+
+---
+
+### 🧠 Prompt
+
+- **Auto (generated from layout)**  
+  Builds the injected prompt automatically from your Layout.
+
+- **Custom prompt**  
+  Lets advanced users write their own prompt manually.
+
+A live **Injection Preview** shows exactly what will be sent to the model.
+
+---
+
+### 📌 About “Extra”
+
+If the model outputs keys that aren’t defined in your layout, they appear in the **Extras** section instead of being discarded.  
+This helps prevent information loss and makes it easy to discover new infos to add later.
+
+
+---
+
 ## 📱 Mobile support
 
 The panel respects:
