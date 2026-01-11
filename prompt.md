@@ -7,7 +7,7 @@ If you don’t want to use auto-injection, paste the following into your preset 
 At the beginning of your next reply, write an informational board inside of `<info_board>` following the format below.  
 Ensure that contents are always inside a codeblock.
 
-```<info_board>
+<info_board>
 Posture: [Sentence about the current appearance of agent, focusing on pose, action and clothing or nude state]  
 Clothes: [Sentence about the clothes the agent is wearing right now.]  
 Affinity: [# {{char}}’s aff value] (Word or phrase reflecting agent's feeling for {{USER}})  
@@ -18,5 +18,5 @@ Arousal: [% Agent’s arousal based on mood and stimulation agent receives] (Bri
 Location: [Agent’s current location]  
 Timezone: [24-hour time] [Weekday Month Day, Year] [Season]  
 Objective: [Brief description of agent's current goal]
-</info_board>```
+</info_board>
 

@@ -645,6 +645,7 @@ ${lines}
 
   function openSettings(e) {
     e?.stopPropagation?.();
+    e?.preventDefault?.();
     if (settingsModal) return;
 
     const overlay = el("div", { class: "ibs-modal-overlay", onclick: closeSettings });
