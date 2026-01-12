@@ -252,37 +252,40 @@
    SETTINGS MODAL
    ========================= */
 .ibs-modal-overlay {
-  position: fixed;
-  inset: 0;
+   position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 2147483647 !important;
 
-  background: rgba(0,0,0,0.55);
+  background: rgba(0,0,0,0.75);
   backdrop-filter: blur(6px);
 
   display: flex;
-  align-items: flex-start;         /* ✅ top align instead of center */
+  align-items: center;
   justify-content: center;
-  padding: calc(12px + env(safe-area-inset-top, 0px)) 12px
-           calc(12px + env(safe-area-inset-bottom, 0px)) 12px;
+  
+  padding: 20px;
 
-  overflow-y: auto;                 /* ✅ overlay scroll */
+  overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
 
 .ibs-modal {
-  width: min(920px, 96vw);
-
-  max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
-  height: auto;                     /* ✅ let it fit */
+   width: min(600px, calc(100vw - 40px));
+  max-height: 80vh;
   
-  background: rgba(16,16,16,0.92);
+  background: rgba(16,16,16,0.95);
   border: 1px solid rgba(255,255,255,0.10);
   border-radius: 16px;
   box-shadow: 0 18px 60px rgba(0,0,0,0.6);
 
-  overflow: hidden;                 /* keep internal scrolling in body */
   display: flex;
   flex-direction: column;
+  
+  position: relative;
+  margin: auto;
 }
 
 .ibs-modal-header {

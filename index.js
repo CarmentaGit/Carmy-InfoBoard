@@ -637,12 +637,27 @@ ${lines}
   // Settings modal (visual editor)
   // =========================
   function closeSettings() {
-    if (settingsModal) {
-      settingsModal.remove();
-      settingsModal = null;
+  if (settingsModal) {
+    // 🔧 Show the sidebar panel again
+    const panel = document.getElementById('ibs-panel');
+    if (panel) {
+      panel.style.display = '';
     }
+    
+    // 🔧 Restore the hidden SillyTavern interface
+    const hiddenId = settingsModal.getAttribute('data-hidden-element');
+    if (hiddenId) {
+      const stRoot = document.getElementById(hiddenId) || 
+                     document.querySelector('body > div:first-child');
+      if (stRoot) {
+        stRoot.style.display = '';
+      }
+    }
+    
+    settingsModal.remove();
+    settingsModal = null;
   }
-
+}
   function openSettings(e) {
     e?.stopPropagation?.();
     e?.preventDefault?.();
@@ -673,7 +688,64 @@ ${lines}
 
     modal.append(header, tabs, body, footer);
     overlay.append(modal);
+    
+    settingsModal = overlay;
+    
+    // Append directly to body
     document.body.append(overlay);
+    
+    // Force positioning after a tiny delay
+    setTimeout(() => {
+      // Force inline styles to override everything
+      overlay.style.cssText = `
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        z-index: 2147483647 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        background: rgba(0,0,0,0.95) !important;
+        padding: 20px !important;
+        overflow-y: auto !important;
+      `;
+
+      const modalBox = overlay.querySelector('.ibs-modal');
+      if (modalBox) {
+        modalBox.style.cssText = `
+          position: relative !important;
+          z-index: 2147483648 !important;
+          max-height: 80vh !important;
+          width: 90vw !important;
+          max-width: 600px !important;
+          margin: auto !important;
+          background: rgba(16,16,16,0.98) !important;
+          border: 1px solid rgba(255,255,255,0.2) !important;
+          border-radius: 16px !important;
+          display: flex !important;
+          flex-direction: column !important;
+          overflow: hidden !important;
+        `;
+      }
+      
+      // Force body to be visible and scrollable
+      const modalBody = overlay.querySelector('.ibs-modal-body');
+      if (modalBody) {
+        modalBody.style.cssText = `
+          padding: 12px !important;
+          overflow-y: auto !important;
+          -webkit-overflow-scrolling: touch !important;
+          flex: 1 !important;
+          min-height: 0 !important;
+          color: rgba(255,255,255,0.9) !important;
+        `;
+      }
+    }, 100);
+
     settingsModal = overlay;
 
     let activeTab = "general";
@@ -1134,7 +1206,6 @@ ${lines}
 
     renderTab();
   }
-
   // =========================
   // Injection via fetch wrapper
   // =========================
