@@ -4,7 +4,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Carmenta",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "homePage": "https://github.com/CarmentaGit/Carmy-InfoBoard",
   "auto_update": false,
   "minimum_client_version": "1.0.0"

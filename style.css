@@ -653,3 +653,38 @@
 .ibs-adv-body {
   margin-top: 10px;
 }
+
+/* Range slider */
+.ibs-range-slider {
+  width: 100px;
+  height: 6px;
+  border-radius: 5px;
+  background: rgba(255,255,255,0.15);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.ibs-range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.9);
+  cursor: pointer;
+}
+
+.ibs-range-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.9);
+  cursor: pointer;
+  border: none;
+}
+
+.ibs-slider-wrap {
+  display: flex;
+  align-items: center;
+}

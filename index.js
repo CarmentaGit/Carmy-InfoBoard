@@ -28,6 +28,7 @@
 
     // UI
     showAdvanced: false,
+    panelOpacity: 0.78,
   };
 
   // Default visual layout (your current vibe)
@@ -401,6 +402,8 @@ ${lines}
 
     panel = el("div", { id: "ibs-panel", class: "ibs-panel" });
 
+    applyPanelOpacity();
+
     const header = el("div", { class: "ibs-header" }, [
       el("div", { class: "ibs-titlewrap" }, [
         el("div", { class: "ibs-title" }, ["Current State"]),
@@ -438,6 +441,12 @@ ${lines}
 
   function renderOpenState() {
     root.classList.toggle("open", prefs.open);
+  }
+
+  function applyPanelOpacity() {
+    if (panel) {
+      panel.style.backgroundColor = `rgba(16,16,16,${prefs.panelOpacity})`;
+    }
   }
 
   // ----- rendering helpers -----
@@ -814,7 +823,13 @@ ${lines}
           layoutConfig.extrasSectionTitle = v || "Extra";
           saveLayout();
           refreshFromChat();
-        })
+        }),
+
+        sliderRow("Panel opacity", prefs.panelOpacity, 0, 1, 0.01, (v) => {
+          prefs.panelOpacity = v;
+          savePrefs();
+          applyPanelOpacity();
+        }, `${Math.round(prefs.panelOpacity * 100)}%`)
       );
 
       body.append(row1);
@@ -1220,6 +1235,36 @@ dialog.append(dialogBox);
       return wrap;
     }
 
+    function sliderRow(labelText, value, min, max, step, onChange, displayValue) {
+      const row = el("div", { class: "ibs-toggle-row" });
+
+      const left = el("div", { class: "ibs-toggle-left" }, [
+        el("div", { class: "ibs-toggle-title" }, [labelText]),
+        el("div", { class: "ibs-toggle-hint" }, [displayValue || String(value)])
+      ]);
+
+      const slider = el("input", { 
+        type: "range", 
+        min: String(min), 
+        max: String(max), 
+        step: String(step),
+        value: String(value),
+        class: "ibs-range-slider"
+      });
+      
+      slider.addEventListener("input", () => {
+        const val = parseFloat(slider.value);
+        const display = displayValue ? `${Math.round(val * 100)}%` : String(val);
+        left.querySelector(".ibs-toggle-hint").textContent = display;
+        onChange(val);
+      });
+
+      const right = el("div", { class: "ibs-slider-wrap" }, [slider]);
+
+      row.append(left, right);
+      return row;
+    }
+  
     function textRow(labelText, value, onInput) {
       const input = el("input", { class: "ibs-input", value: value || "" });
       input.addEventListener("input", () => onInput(input.value));
