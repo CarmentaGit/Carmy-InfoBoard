@@ -17,9 +17,18 @@
     hideInChat: true,
     stripOuterBrackets: false,
 
-    // default ON
+    // Pull mode: "auto" = inject into generation, "manual" = click button to generate
+    pullMode: "auto",
+
+    // For auto mode
     autoInjectPrompt: true,
     injectRole: "system", // "system" | "user"
+
+    // For manual mode
+    manualProfile: "", // empty = use current profile
+
+    // History: "all" or a number like 5, 10, 20
+    historyLimit: "all",
 
     // prompt mode:
     // - "schema": generated from layout
@@ -93,6 +102,8 @@ Objective: [...]
   const prefs = { ...DEFAULT_PREFS };
   let layoutConfig = structuredClone(DEFAULT_LAYOUT);
   let customPrompt = DEFAULT_CUSTOM_PROMPT;
+  let isGenerating = false; // Prevent double-clicks
+  let availableProfiles = []; // Cache of connection profiles
 
   function loadPrefs() {
     try {
@@ -182,7 +193,303 @@ Objective: [...]
   }
 
   // =========================
-  // Per-character cache
+  // SillyTavern API Helpers
+  // =========================
+  function getSTContext() {
+    try {
+      if (typeof SillyTavern !== "undefined" && SillyTavern.getContext) {
+        return SillyTavern.getContext();
+      }
+    } catch (e) {
+      console.warn("[IBS] Could not get SillyTavern context:", e);
+    }
+    return null;
+  }
+
+  function hasSTAPI() {
+    return getSTContext() !== null;
+  }
+
+  // Get character/user names and group info for prompt context
+  function getChatParticipants() {
+    const info = { userName: "", charName: "", charNames: [], isGroup: false };
+    try {
+      const context = getSTContext();
+      if (context) {
+        info.userName = context.name1 || "";
+        info.charName = context.name2 || "";
+
+        // Check for group chat
+        if (context.groupId) {
+          info.isGroup = true;
+          const group = (context.groups || []).find(g => g.id === context.groupId);
+          if (group?.members && Array.isArray(context.characters)) {
+            // members are avatar filenames - resolve to character names
+            for (const avatarOrId of group.members) {
+              const ch = context.characters.find(c => c.avatar === avatarOrId);
+              const name = ch?.name || "";
+              if (name && !info.charNames.includes(name)) {
+                info.charNames.push(name);
+              }
+            }
+          }
+        }
+      }
+
+      // Fallback for character name from window globals
+      if (!info.charName && window?.characters && window?.this_chid !== undefined) {
+        const ch = window.characters[window.this_chid];
+        if (ch?.name) info.charName = ch.name;
+      }
+
+      // If group but member resolution failed, try extracting names from chat
+      if (info.isGroup && info.charNames.length === 0) {
+        const context = getSTContext();
+        if (context?.chat) {
+          const nameSet = new Set();
+          for (const msg of context.chat) {
+            if (!msg.is_user && msg.name) {
+              nameSet.add(msg.name);
+            }
+          }
+          info.charNames = Array.from(nameSet);
+        }
+        // Last resort: at least include the main char name
+        if (info.charNames.length === 0 && info.charName) {
+          info.charNames.push(info.charName);
+        }
+      }
+    } catch {}
+    return info;
+  }
+
+  // Get available connection profiles - tries multiple methods
+  async function fetchConnectionProfiles() {
+    const profiles = [];
+    
+    try {
+      // Method 1: Try to access power_user.connection_profiles directly
+      if (window.power_user?.connection_profiles) {
+        const cp = window.power_user.connection_profiles;
+        if (Array.isArray(cp)) {
+          for (const p of cp) {
+            // Profile objects have { id, name, ... } - we want the name
+            if (p?.name) {
+              profiles.push(p.name);
+            } else if (typeof p === "string") {
+              profiles.push(p);
+            }
+          }
+        } else if (typeof cp === "object") {
+          // If it's an object keyed by ID, get the names
+          for (const key of Object.keys(cp)) {
+            const profile = cp[key];
+            if (profile?.name) {
+              profiles.push(profile.name);
+            } else if (typeof profile === "string") {
+              profiles.push(profile);
+            }
+          }
+        }
+      }
+      
+      // Method 2: Try the UI dropdown directly - this has the display names
+      if (profiles.length === 0) {
+        const profileSelect = document.querySelector('#connection_profiles');
+        if (profileSelect) {
+          const options = profileSelect.querySelectorAll('option');
+          options.forEach(opt => {
+            const name = opt.textContent?.trim();
+            // Skip empty, "None", "Default" type entries
+            if (name && name !== "<None>" && name !== "None" && name !== "Default" && !profiles.includes(name)) {
+              profiles.push(name);
+            }
+          });
+        }
+      }
+      
+      // Method 3: Try executeSlashCommands if available
+      if (profiles.length === 0) {
+        const context = getSTContext();
+        if (context?.executeSlashCommands) {
+          try {
+            const result = await context.executeSlashCommands("/profile-list");
+            if (result && typeof result === "string") {
+              try {
+                const parsed = JSON.parse(result);
+                if (Array.isArray(parsed)) {
+                  for (const p of parsed) {
+                    if (typeof p === "string") profiles.push(p);
+                    else if (p?.name) profiles.push(p.name);
+                  }
+                }
+              } catch {
+                const lines = result.split("\n").map(l => l.trim()).filter(Boolean);
+                profiles.push(...lines);
+              }
+            }
+          } catch {}
+        }
+      }
+      
+    } catch (e) {
+      console.warn("[IBS] Could not fetch profiles:", e);
+    }
+    
+    availableProfiles = profiles;
+    console.log("[IBS] Found profiles:", profiles);
+    return profiles;
+  }
+
+  // Get current profile name
+  async function getCurrentProfile() {
+    try {
+      // Method 1: Get from UI dropdown (most reliable for getting the display name)
+      const profileSelect = document.querySelector('#connection_profiles');
+      if (profileSelect && profileSelect.selectedIndex >= 0) {
+        const selectedOption = profileSelect.options[profileSelect.selectedIndex];
+        const name = selectedOption?.textContent?.trim();
+        if (name && name !== "<None>" && name !== "None") {
+          console.log("[IBS] Current profile from UI:", name);
+          return name;
+        }
+      }
+      
+      // Method 2: Try power_user - but need to map ID to name
+      if (window.power_user?.connection_profiles && window.power_user?.selected_connection_profile) {
+        const selectedId = window.power_user.selected_connection_profile;
+        const profiles = window.power_user.connection_profiles;
+        if (Array.isArray(profiles)) {
+          const found = profiles.find(p => p.id === selectedId);
+          if (found?.name) {
+            console.log("[IBS] Current profile from power_user:", found.name);
+            return found.name;
+          }
+        }
+      }
+      
+      // Method 3: Try slash command
+      const context = getSTContext();
+      if (context?.executeSlashCommands) {
+        const result = await context.executeSlashCommands("/profile");
+        if (result && typeof result === "string") {
+          console.log("[IBS] Current profile from slash command:", result);
+          return result.trim();
+        }
+      }
+      
+      return "";
+    } catch (e) {
+      console.warn("[IBS] Could not get current profile:", e);
+      return "";
+    }
+  }
+
+  // Switch to a profile (case-insensitive matching, with verification)
+  async function switchProfile(profileName) {
+    try {
+      if (!profileName) return false;
+
+      console.log("[IBS] Switching to profile:", profileName);
+      const target = profileName.trim().toLowerCase();
+
+      // Method 1: Try using the UI dropdown directly (case-insensitive)
+      const profileSelect = document.querySelector('#connection_profiles');
+      if (profileSelect) {
+        const options = Array.from(profileSelect.options);
+        const targetOption = options.find(opt =>
+          opt.textContent?.trim().toLowerCase() === target
+        );
+        if (targetOption) {
+          profileSelect.value = targetOption.value;
+          profileSelect.dispatchEvent(new Event('change', { bubbles: true }));
+          console.log("[IBS] Profile switched via UI dropdown");
+          // Wait for ST to process the change
+          await new Promise(r => setTimeout(r, 300));
+          return true;
+        }
+      }
+
+      // Method 2: Try slash command
+      const context = getSTContext();
+      if (context?.executeSlashCommands) {
+        await context.executeSlashCommands(`/profile ${profileName}`);
+        console.log("[IBS] Profile switched via slash command");
+        await new Promise(r => setTimeout(r, 300));
+        return true;
+      }
+
+      return false;
+    } catch (e) {
+      console.warn("[IBS] Could not switch profile:", e);
+      return false;
+    }
+  }
+
+  // Verify that the current profile matches expected (case-insensitive)
+  async function verifyProfile(expectedName) {
+    const current = await getCurrentProfile();
+    if (!current || !expectedName) return false;
+    return current.trim().toLowerCase() === expectedName.trim().toLowerCase();
+  }
+
+  // =========================
+  // Message Metadata Storage
+  // =========================
+  function getStoredInfoBoardsFromChat() {
+    const context = getSTContext();
+    if (!context?.chat) return [];
+
+    const boards = [];
+    for (let i = 0; i < context.chat.length; i++) {
+      const msg = context.chat[i];
+      if (!msg.is_user && msg.extra?.infoboard?.data) {
+        boards.push({
+          index: i,
+          data: msg.extra.infoboard.data,
+          generatedAt: msg.extra.infoboard.generatedAt || null
+        });
+      }
+    }
+    return boards;
+  }
+
+  function storeInfoBoardOnMessage(messageIndex, data) {
+    const context = getSTContext();
+    if (!context?.chat || messageIndex < 0 || messageIndex >= context.chat.length) return false;
+
+    const msg = context.chat[messageIndex];
+    if (!msg) return false;
+
+    msg.extra = msg.extra || {};
+    msg.extra.infoboard = {
+      data: data,
+      generatedAt: Date.now(),
+      profile: prefs.manualProfile || "current"
+    };
+
+    // Save the chat to persist
+    if (context.saveChat) {
+      context.saveChat();
+    }
+
+    return true;
+  }
+
+  function getLastBotMessageIndex() {
+    const context = getSTContext();
+    if (!context?.chat) return -1;
+
+    for (let i = context.chat.length - 1; i >= 0; i--) {
+      if (!context.chat[i].is_user) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // =========================
+  // Per-character cache (fallback when ST API not available)
   // =========================
   const CACHE_KEY = `${MODULE_ID}_board_cache_v1`;
   let boardCache = {};
@@ -338,8 +645,6 @@ Objective: [...]
           const f = keyToField.get(k) || {};
           const disp = f.display || "text";
 
-          // Users requested: text / text+bar / bar-only
-          // We keep chips/mono for compatibility and defaults.
           if (disp === "bar_only") return `${k}: [%]`;
           if (disp === "bar_text") return `${k}: [%] - [...]`;
           return `${k}: [...]`;
@@ -357,8 +662,17 @@ Objective: [...]
           "Objective: [...]",
         ].join("\n");
 
+    // Build perspective context
+    const p = getChatParticipants();
+    let perspectiveNote = "";
+    if (p.isGroup && p.charNames.length > 0) {
+      perspectiveNote = `\nThis is a group chat with characters: ${p.charNames.join(", ")}. The info board must describe the CHARACTER(S) (${p.charNames.join(", ")}), NOT the user${p.userName ? ` (${p.userName})` : ""}. Track the characters' states, emotions, and actions.`;
+    } else if (p.charName) {
+      perspectiveNote = `\nThe info board must describe the CHARACTER (${p.charName}), NOT the user${p.userName ? ` (${p.userName})` : ""}. Track ${p.charName}'s state, emotions, and actions.`;
+    }
+
     return `${IBS_MARKER}
-At the beginning of your next reply, write an informational board inside of <info_board>, based on the current setting and what just happened. Keep it concise and consistent. Ensure ALL contents are inside a codeblock.
+At the beginning of your next reply, write an informational board inside of <info_board>, based on the current setting and what just happened. Keep it concise and consistent. Ensure ALL contents are inside a codeblock. Do NOT think or reason about it, just output the board directly.${perspectiveNote}
 
 <info_board>
 \`\`\`
@@ -375,10 +689,378 @@ ${lines}
     return buildPromptFromSchema();
   }
 
+  // Build prompt with history context for manual pull
+  function buildManualPullPrompt() {
+    const storedBoards = getStoredInfoBoardsFromChat();
+    
+    // Apply history limit
+    let boardsToInclude = storedBoards;
+    if (prefs.historyLimit !== "all" && typeof prefs.historyLimit === "number") {
+      boardsToInclude = storedBoards.slice(-prefs.historyLimit);
+    }
+
+    let historySection = "";
+    if (boardsToInclude.length > 0) {
+      // Use the board's original index in storedBoards for "messages ago" calc
+      const totalBoards = storedBoards.length;
+      const startIdx = totalBoards - boardsToInclude.length;
+      const historyLines = boardsToInclude.map((b, idx) => {
+        const originalIdx = startIdx + idx;
+        const messagesAgo = totalBoards - originalIdx;
+        const dataLines = Object.entries(b.data)
+          .map(([k, v]) => `  ${k}: ${v}`)
+          .join("\n");
+        return `[${messagesAgo} messages ago]\n${dataLines}`;
+      }).join("\n---\n");
+
+      historySection = `
+Here are the previous InfoBoard states for reference. Use these to maintain consistency - values should only change if something happened in the story to change them:
+
+${historyLines}
+
+---
+Now, based on what just happened in the most recent message, generate the CURRENT InfoBoard state:
+`;
+    }
+
+    const basePrompt = prefs.promptMode === "custom" 
+      ? (customPrompt || "").replace(IBS_MARKER, "").trim()
+      : buildPromptFromSchema().replace(IBS_MARKER, "").trim();
+
+    // Build perspective context
+    const p = getChatParticipants();
+    let perspectiveNote = "";
+    if (p.isGroup && p.charNames.length > 0) {
+      perspectiveNote = `\nThis is a group chat with characters: ${p.charNames.join(", ")}. The info board must describe the CHARACTER(S) (${p.charNames.join(", ")}), NOT the user${p.userName ? ` (${p.userName})` : ""}. Track the characters' states, emotions, and actions.`;
+    } else if (p.charName) {
+      perspectiveNote = `\nThe info board must describe the CHARACTER (${p.charName}), NOT the user${p.userName ? ` (${p.userName})` : ""}. Track ${p.charName}'s state, emotions, and actions.`;
+    }
+
+    return `${IBS_MARKER}
+IMPORTANT: Output ONLY the info board below. Do NOT think, reason, or explain. Just fill in the values directly.${perspectiveNote}
+${historySection}
+${basePrompt}`;
+  }
+
+  // =========================
+  // Manual Pull Generation
+  // =========================
+  // Resolve generation function - prefer generateRaw (doesn't touch chat/swipes)
+  // Falls back to generateQuietPrompt if generateRaw isn't available
+  function resolveGenerateFunction() {
+    const context = getSTContext();
+    // Prefer generateRaw - it doesn't corrupt swipes
+    if (context?.generateRaw) {
+      return { fn: context.generateRaw, type: "raw" };
+    }
+    if (typeof window.generateRaw === "function") {
+      return { fn: window.generateRaw, type: "raw" };
+    }
+    // Fallback to generateQuietPrompt
+    if (context?.generateQuietPrompt) {
+      return { fn: context.generateQuietPrompt, type: "quiet" };
+    }
+    if (typeof window.generateQuietPrompt === "function") {
+      return { fn: window.generateQuietPrompt, type: "quiet" };
+    }
+    return null;
+  }
+
+  // Build chat context messages from ST chat for use with generateRaw
+  function buildChatContextMessages(maxMessages = 20) {
+    const context = getSTContext();
+    if (!context?.chat || context.chat.length === 0) return [];
+
+    const messages = [];
+    const chat = context.chat;
+    // Take last N messages for context
+    const start = Math.max(0, chat.length - maxMessages);
+
+    for (let i = start; i < chat.length; i++) {
+      const msg = chat[i];
+      if (!msg || !msg.mes) continue;
+
+      // Strip any existing infoboard blocks from the message to keep context clean
+      let content = String(msg.mes);
+      content = content.replace(/<info_board[^>]*>[\s\S]*?<\/info_board>/gi, "").trim();
+      // Also strip code blocks that look like infoboards
+      content = content.replace(/```[\s\S]*?```/g, (match) => {
+        return looksLikeInfoBoard(match) ? "" : match;
+      }).trim();
+
+      if (!content) continue;
+
+      messages.push({
+        role: msg.is_user ? "user" : "assistant",
+        content: content
+      });
+    }
+
+    return messages;
+  }
+
+  // Restore profile with retry logic
+  async function restoreProfileWithRetry(profileName, maxAttempts = 3) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      console.log(`[IBS] Restore attempt ${attempt}/${maxAttempts}: ${profileName}`);
+      const switched = await switchProfile(profileName);
+      if (switched) {
+        const verified = await verifyProfile(profileName);
+        if (verified) {
+          console.log("[IBS] Profile restored and verified");
+          return true;
+        }
+        console.warn("[IBS] Profile switched but verification failed, retrying...");
+      }
+      // Increasing delay between retries
+      if (attempt < maxAttempts) {
+        await new Promise(r => setTimeout(r, 200 * attempt));
+      }
+    }
+    return false;
+  }
+
+  async function manualPullInfoBoard() {
+    if (isGenerating) return;
+
+    const context = getSTContext();
+    if (!context) {
+      console.warn("[IBS] SillyTavern API not available for manual pull");
+      showToast("SillyTavern API not available", "error");
+      return;
+    }
+
+    // Resolve generate function early so we fail fast
+    const gen = resolveGenerateFunction();
+    if (!gen) {
+      showToast("No generation function available - is SillyTavern fully loaded?", "error");
+      return;
+    }
+
+    isGenerating = true;
+    updateGenerateButton(true);
+
+    // Temporarily block auto-injection while we're switched to a different profile
+    const savedAutoInject = prefs.autoInjectPrompt;
+    let originalProfile = "";
+    let switchedProfile = false;
+
+    try {
+      // If using a specific profile, switch to it
+      if (prefs.manualProfile && prefs.manualProfile !== "") {
+        // Validate that the target profile still exists
+        if (availableProfiles.length > 0) {
+          const targetLower = prefs.manualProfile.trim().toLowerCase();
+          const exists = availableProfiles.some(p => p.trim().toLowerCase() === targetLower);
+          if (!exists) {
+            // Refresh profiles in case list is stale
+            await fetchConnectionProfiles();
+            const stillMissing = !availableProfiles.some(p => p.trim().toLowerCase() === targetLower);
+            if (stillMissing) {
+              throw new Error(`Profile "${prefs.manualProfile}" not found. Check Settings > General.`);
+            }
+          }
+        }
+
+        originalProfile = await getCurrentProfile();
+        console.log("[IBS] Original profile:", originalProfile);
+        console.log("[IBS] Target profile:", prefs.manualProfile);
+
+        // Case-insensitive comparison to see if we need to switch
+        const alreadyOnTarget = originalProfile &&
+          originalProfile.trim().toLowerCase() === prefs.manualProfile.trim().toLowerCase();
+
+        if (!alreadyOnTarget) {
+          // Disable auto-inject so if any other request fires during our switch,
+          // it won't inject the infoboard prompt using the wrong profile
+          prefs.autoInjectPrompt = false;
+
+          const switched = await switchProfile(prefs.manualProfile);
+          if (switched) {
+            switchedProfile = true;
+            console.log("[IBS] Switched to target profile");
+          } else {
+            console.warn("[IBS] Failed to switch to target profile, generating with current");
+            showToast("Could not switch profile - using current", "warning");
+          }
+        } else {
+          console.log("[IBS] Already on target profile, no switch needed");
+        }
+      }
+
+      // Build prompt with history
+      const ibsPrompt = buildManualPullPrompt();
+      let result;
+
+      if (gen.type === "raw") {
+        // generateRaw: doesn't touch chat/swipes at all
+        // Build a messages array: chat context + infoboard instruction
+        const chatMessages = buildChatContextMessages(20);
+        const prompt = [
+          ...chatMessages,
+          { role: "user", content: ibsPrompt }
+        ];
+
+        // Build system prompt with character context
+        const participants = getChatParticipants();
+        let sysPrompt = "You generate structured info boards for roleplay. Output ONLY the info board in the exact format requested. Do NOT explain, reason, or think step-by-step. Respond immediately with the key-value pairs.";
+        if (participants.isGroup && participants.charNames.length > 0) {
+          sysPrompt += ` The info board tracks the CHARACTERS (${participants.charNames.join(", ")}), NOT the user${participants.userName ? ` (${participants.userName})` : ""}. All fields describe the characters' current state.`;
+        } else if (participants.charName) {
+          sysPrompt += ` The info board tracks the CHARACTER (${participants.charName}), NOT the user${participants.userName ? ` (${participants.userName})` : ""}. All fields describe ${participants.charName}'s current state.`;
+        }
+
+        console.log("[IBS] Calling generateRaw with", prompt.length, "messages...");
+        result = await gen.fn({
+          prompt,
+          systemPrompt: sysPrompt
+        });
+      } else {
+        // generateQuietPrompt fallback: takes { quietPrompt } object
+        console.log("[IBS] Calling generateQuietPrompt (fallback)...");
+        result = await gen.fn({ quietPrompt: ibsPrompt });
+      }
+
+      console.log("[IBS] Result type:", typeof result, "length:", String(result || "").length);
+
+      if (!result || (typeof result === "string" && result.trim() === "")) {
+        throw new Error(
+          "Empty response from model. If using a reasoning model (DeepSeek R1, etc.), " +
+          "it may have spent all tokens on thinking. Try a non-reasoning model or increase max tokens."
+        );
+      }
+
+      // Parse the result - try multiple extraction methods
+      let infoBoardText = typeof result === "string" ? result : String(result);
+
+      // Method 1: Extract from <info_board> tags
+      const tagMatch = infoBoardText.match(/<info_board[^>]*>([\s\S]*?)<\/info_board>/i);
+      if (tagMatch) {
+        console.log("[IBS] Found <info_board> tags");
+        infoBoardText = tagMatch[1];
+      }
+
+      // Method 2: Extract from code block
+      const codeMatch = infoBoardText.match(/```(?:\w*\n)?([\s\S]*?)```/);
+      if (codeMatch) {
+        console.log("[IBS] Found code block");
+        infoBoardText = codeMatch[1];
+      }
+
+      // Method 3: Parse key-value lines
+      let data = parseKeyValueLines(infoBoardText.trim());
+      console.log("[IBS] Parsed data keys:", Object.keys(data));
+
+      // Fallback: try parsing the entire raw result
+      if (Object.keys(data).length === 0 && typeof result === "string") {
+        data = parseKeyValueLines(result.trim());
+      }
+
+      // Fallback: flexible extraction for lines matching "Key: Value"
+      if (Object.keys(data).length === 0) {
+        const lines = (typeof result === "string" ? result : "").split("\n");
+        for (const line of lines) {
+          const colonIdx = line.indexOf(":");
+          if (colonIdx > 0 && colonIdx < 30) {
+            const key = line.slice(0, colonIdx).trim();
+            const value = line.slice(colonIdx + 1).trim();
+            if (key && value && /^[A-Z][a-zA-Z\s]*$/.test(key)) {
+              data[key.trim()] = value;
+            }
+          }
+        }
+      }
+
+      if (Object.keys(data).length === 0) {
+        // Log enough to debug but not spam the console
+        const preview = String(result || "").slice(0, 500);
+        console.error("[IBS] Failed to parse InfoBoard. Response preview:", preview);
+        throw new Error("Could not parse InfoBoard from response. Check browser console (F12) for raw output.");
+      }
+
+      // Store on last bot message
+      const lastBotIndex = getLastBotMessageIndex();
+      if (lastBotIndex >= 0) {
+        storeInfoBoardOnMessage(lastBotIndex, data);
+      }
+
+      // Update display
+      lastDetectedKeys = Object.keys(data).sort((a, b) => a.localeCompare(b));
+      renderBoard(data);
+      setCacheForActive(data);
+
+      showToast("InfoBoard generated!", "success");
+
+    } catch (err) {
+      console.error("[IBS] Manual pull error:", err);
+      showToast(`Generation failed: ${err.message}`, "error");
+    } finally {
+      // Always restore auto-inject setting first
+      prefs.autoInjectPrompt = savedAutoInject;
+
+      // Restore original profile if we switched
+      if (switchedProfile && originalProfile) {
+        try {
+          console.log("[IBS] Restoring original profile:", originalProfile);
+          const restored = await restoreProfileWithRetry(originalProfile);
+          if (!restored) {
+            console.error("[IBS] CRITICAL: Could not restore profile to:", originalProfile);
+            showToast(`Warning: Could not restore profile to "${originalProfile}". Please switch manually!`, "error");
+          }
+        } catch (restoreErr) {
+          console.error("[IBS] Profile restore threw:", restoreErr);
+          showToast(`Warning: Could not restore profile. Please switch manually!`, "error");
+        }
+      }
+
+      // These MUST always execute regardless of profile restore outcome
+      isGenerating = false;
+      updateGenerateButton(false);
+    }
+  }
+
+  function showToast(message, type = "info") {
+    // Try to use ST's toast if available
+    const context = getSTContext();
+    if (context?.toastr) {
+      if (type === "error") context.toastr.error(message);
+      else if (type === "warning") context.toastr.warning(message);
+      else if (type === "success") context.toastr.success(message);
+      else context.toastr.info(message);
+      return;
+    }
+
+    // Fallback: simple toast
+    const bgColors = {
+      error: "rgba(255,80,80,0.9)",
+      warning: "rgba(255,180,50,0.9)",
+      success: "rgba(74,200,120,0.9)",
+      info: "rgba(74,163,255,0.9)"
+    };
+    const toast = el("div", {
+      class: "ibs-toast",
+      style: `
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 10px 20px;
+        background: ${bgColors[type] || bgColors.info};
+        color: white;
+        border-radius: 8px;
+        z-index: 99999;
+        font-size: 13px;
+      `
+    }, [message]);
+
+    document.body.append(toast);
+    setTimeout(() => toast.remove(), 3000);
+  }
+
   // =========================
   // UI (HUD)
   // =========================
-  let root, panel, content;
+  let root, panel, content, generateBtn;
   let settingsModal = null;
   let lastDetectedKeys = [];
 
@@ -404,12 +1086,22 @@ ${lines}
 
     applyPanelOpacity();
 
+    // Create generate button (for manual mode)
+    generateBtn = el("button", { 
+      class: "ibs-mini ibs-generate-btn", 
+      title: "Generate InfoBoard",
+      onclick: manualPullInfoBoard 
+    }, ["📥"]);
+
     const header = el("div", { class: "ibs-header" }, [
       el("div", { class: "ibs-titlewrap" }, [
         el("div", { class: "ibs-title" }, ["Current State"]),
-        el("div", { class: "ibs-subtitle" }, ["Live RP snapshot"]),
+        el("div", { class: "ibs-subtitle", id: "ibs-subtitle" }, [
+          prefs.pullMode === "manual" ? "Manual mode" : "Auto mode"
+        ]),
       ]),
       el("div", { class: "ibs-actions" }, [
+        generateBtn,
         el("button", { class: "ibs-mini", title: "Refresh", onclick: () => refreshFromChat(true) }, ["↻"]),
         el("button", { class: "ibs-mini", title: "Settings", onclick: openSettings }, ["⚙"]),
         el(
@@ -437,6 +1129,25 @@ ${lines}
     document.body.append(root);
 
     renderOpenState();
+    updateGenerateButtonVisibility();
+  }
+
+  function updateGenerateButton(loading = false) {
+    if (!generateBtn) return;
+    generateBtn.textContent = loading ? "⏳" : "📥";
+    generateBtn.disabled = loading;
+    generateBtn.style.opacity = loading ? "0.5" : "1";
+  }
+
+  function updateGenerateButtonVisibility() {
+    if (!generateBtn) return;
+    generateBtn.style.display = prefs.pullMode === "manual" ? "" : "none";
+    
+    // Update subtitle
+    const subtitle = document.getElementById("ibs-subtitle");
+    if (subtitle) {
+      subtitle.textContent = prefs.pullMode === "manual" ? "Manual mode" : "Auto mode";
+    }
   }
 
   function renderOpenState() {
@@ -574,11 +1285,22 @@ ${lines}
   // Chat parsing + hide in chat
   // =========================
   function getLatestInfoBoardCodeBlock() {
-    const codes = Array.from(document.querySelectorAll(".mes pre code"));
-    for (let i = codes.length - 1; i >= 0; i--) {
-      const codeEl = codes[i];
-      const t = (codeEl.textContent || "").trim();
-      if (looksLikeInfoBoard(t)) return codeEl;
+    // Try multiple selectors - mobile ST may use different markup
+    const selectors = [
+      ".mes pre code",           // Standard desktop
+      ".mes code",               // Code without pre wrapper
+      ".mes .mes_text pre code", // Nested in mes_text
+      ".mes .mes_text code",     // Nested code without pre
+      ".mes_block pre code",     // Alternative block structure
+    ];
+
+    for (const selector of selectors) {
+      const codes = Array.from(document.querySelectorAll(selector));
+      for (let i = codes.length - 1; i >= 0; i--) {
+        const codeEl = codes[i];
+        const t = (codeEl.textContent || "").trim();
+        if (looksLikeInfoBoard(t)) return codeEl;
+      }
     }
     return null;
   }
@@ -590,25 +1312,108 @@ ${lines}
     pre.style.display = prefs.hideInChat ? "none" : "";
   }
 
+  // Try to extract infoboard data directly from the raw message text (ST chat array)
+  // This works even if DOM rendering strips or reformats the content
+  function parseInfoBoardFromMessageData() {
+    const context = getSTContext();
+    if (!context?.chat) return null;
+
+    // Check last few bot messages (most recent first)
+    for (let i = context.chat.length - 1; i >= Math.max(0, context.chat.length - 5); i--) {
+      const msg = context.chat[i];
+      if (msg.is_user || !msg.mes) continue;
+
+      let text = String(msg.mes);
+
+      // Try extracting from <info_board> tags
+      const tagMatch = text.match(/<info_board[^>]*>([\s\S]*?)<\/info_board>/i);
+      if (tagMatch) text = tagMatch[1];
+
+      // Try extracting from code block
+      const codeMatch = text.match(/```(?:\w*\n)?([\s\S]*?)```/);
+      if (codeMatch) text = codeMatch[1];
+
+      const data = parseKeyValueLines(text.trim());
+      if (looksLikeInfoBoard(text) && Object.keys(data).length > 0) {
+        return { data, messageIndex: i };
+      }
+    }
+    return null;
+  }
+
   function refreshFromChat() {
     activeKey = getActiveCharacterKey();
 
+    // In auto mode, always try DOM first (that's where fresh auto-generated boards are)
+    // In manual mode, prefer metadata (that's where manualPullInfoBoard stores data)
+
+    // Step 1: Try to find an infoboard in the chat DOM
     const codeEl = getLatestInfoBoardCodeBlock();
-    if (!codeEl) {
-      const cached = getCacheForKey(activeKey);
-      if (cached) renderBoard(cached);
-      else renderBoard(null);
-      return;
+
+    if (codeEl) {
+      const boardText = (codeEl.textContent || "").trim();
+      const data = parseKeyValueLines(boardText);
+
+      if (Object.keys(data).length > 0) {
+        lastDetectedKeys = Object.keys(data).sort((a, b) => a.localeCompare(b));
+        renderBoard(data);
+        setCacheForActive(data);
+        hideOrShowBoardInChat(codeEl);
+
+        // Store in metadata for persistence (auto mode only, manual stores its own)
+        if (prefs.pullMode === "auto" && hasSTAPI()) {
+          const lastBotIndex = getLastBotMessageIndex();
+          if (lastBotIndex >= 0) {
+            const ctx = getSTContext();
+            const msg = ctx?.chat?.[lastBotIndex];
+            if (msg && !msg.extra?.infoboard?.data) {
+              storeInfoBoardOnMessage(lastBotIndex, data);
+            }
+          }
+        }
+        return;
+      }
     }
 
-    const boardText = (codeEl.textContent || "").trim();
-    const data = parseKeyValueLines(boardText);
+    // Step 2: DOM didn't have it - try parsing directly from raw message data
+    // This handles mobile/alternative renderers that may not create <pre><code> elements
+    if (hasSTAPI()) {
+      const rawResult = parseInfoBoardFromMessageData();
+      if (rawResult) {
+        lastDetectedKeys = Object.keys(rawResult.data).sort((a, b) => a.localeCompare(b));
+        renderBoard(rawResult.data);
+        setCacheForActive(rawResult.data);
+        // Hide the DOM element if it exists in some form
+        if (codeEl) hideOrShowBoardInChat(codeEl);
 
-    lastDetectedKeys = Object.keys(data).sort((a, b) => a.localeCompare(b));
+        // Store in metadata
+        if (prefs.pullMode === "auto") {
+          const ctx = getSTContext();
+          const msg = ctx?.chat?.[rawResult.messageIndex];
+          if (msg && !msg.extra?.infoboard?.data) {
+            storeInfoBoardOnMessage(rawResult.messageIndex, rawResult.data);
+          }
+        }
+        return;
+      }
+    }
 
-    renderBoard(data);
-    setCacheForActive(data);
-    hideOrShowBoardInChat(codeEl);
+    // Step 3: Try message metadata (manual mode stores here)
+    if (hasSTAPI()) {
+      const storedBoards = getStoredInfoBoardsFromChat();
+      if (storedBoards.length > 0) {
+        const latest = storedBoards[storedBoards.length - 1];
+        renderBoard(latest.data);
+        lastDetectedKeys = Object.keys(latest.data).sort((a, b) => a.localeCompare(b));
+        if (codeEl) hideOrShowBoardInChat(codeEl);
+        return;
+      }
+    }
+
+    // Step 4: Nothing found anywhere - show cache or empty
+    const cached = getCacheForKey(activeKey);
+    if (cached) renderBoard(cached);
+    else renderBoard(null);
   }
 
   function installObserver() {
@@ -623,6 +1428,36 @@ ${lines}
     });
 
     obs.observe(target, { childList: true, subtree: true });
+
+    // Also hook into SillyTavern's event system as backup
+    // This is more reliable than MutationObserver, especially on mobile
+    try {
+      const context = getSTContext();
+      if (context?.eventSource) {
+        const events = context.event_types || {};
+        // MESSAGE_RECEIVED fires when a new bot message is fully rendered
+        const messageEvents = [
+          events.MESSAGE_RECEIVED,
+          events.MESSAGE_UPDATED,
+          events.MESSAGE_SWIPED,
+          events.CHAT_CHANGED,
+          events.CHARACTER_MESSAGE_RENDERED,
+          "message_received",
+          "chatLoaded",
+        ].filter(Boolean);
+
+        for (const evt of messageEvents) {
+          context.eventSource.on(evt, () => {
+            // Slight delay to let DOM fully render
+            setTimeout(() => refreshFromChat(), 150);
+          });
+        }
+        console.log("[IBS] Hooked into ST events:", messageEvents);
+      }
+    } catch (e) {
+      console.warn("[IBS] Could not hook ST events:", e);
+    }
+
     refreshFromChat();
   }
 
@@ -635,9 +1470,8 @@ ${lines}
       const nextKey = getActiveCharacterKey();
       if (nextKey && nextKey !== activeKey) {
         activeKey = nextKey;
-        const cachedBoard = getCacheForKey(activeKey);
-        if (cachedBoard) renderBoard(cachedBoard);
-        else renderBoard(null);
+        // When character changes, refresh from chat/metadata
+        refreshFromChat();
       }
     }, 600);
   }
@@ -646,31 +1480,33 @@ ${lines}
   // Settings modal (visual editor)
   // =========================
   function closeSettings() {
-  if (settingsModal) {
-    // 🔧 Show the sidebar panel again
-    const panel = document.getElementById('ibs-panel');
-    if (panel) {
-      panel.style.display = '';
-    }
-    
-    // 🔧 Restore the hidden SillyTavern interface
-    const hiddenId = settingsModal.getAttribute('data-hidden-element');
-    if (hiddenId) {
-      const stRoot = document.getElementById(hiddenId) || 
-                     document.querySelector('body > div:first-child');
-      if (stRoot) {
-        stRoot.style.display = '';
+    if (settingsModal) {
+      const panel = document.getElementById('ibs-panel');
+      if (panel) {
+        panel.style.display = '';
       }
+      
+      const hiddenId = settingsModal.getAttribute('data-hidden-element');
+      if (hiddenId) {
+        const stRoot = document.getElementById(hiddenId) || 
+                       document.querySelector('body > div:first-child');
+        if (stRoot) {
+          stRoot.style.display = '';
+        }
+      }
+      
+      settingsModal.remove();
+      settingsModal = null;
     }
-    
-    settingsModal.remove();
-    settingsModal = null;
   }
-}
+
   function openSettings(e) {
     e?.stopPropagation?.();
     e?.preventDefault?.();
     if (settingsModal) return;
+
+    // Fetch profiles when opening settings
+    fetchConnectionProfiles();
 
     const overlay = el("div", { class: "ibs-modal-overlay", onclick: closeSettings });
     const modal = el("div", { class: "ibs-modal", onclick: (ev) => ev.stopPropagation() });
@@ -700,12 +1536,9 @@ ${lines}
     
     settingsModal = overlay;
     
-    // Append directly to body
     document.body.append(overlay);
     
-    // Force positioning after a tiny delay
     setTimeout(() => {
-      // Force inline styles to override everything
       overlay.style.cssText = `
         position: fixed !important;
         top: 0 !important;
@@ -741,7 +1574,6 @@ ${lines}
         `;
       }
       
-      // Force body to be visible and scrollable
       const modalBody = overlay.querySelector('.ibs-modal-body');
       if (modalBody) {
         modalBody.style.cssText = `
@@ -760,7 +1592,6 @@ ${lines}
     let activeTab = "general";
     let selectedCategoryIndex = 0;
 
-    // ensure selected category valid
     if (!layoutConfig.sections || layoutConfig.sections.length === 0) {
       layoutConfig.sections = safeClone(DEFAULT_LAYOUT.sections);
       saveLayout();
@@ -784,6 +1615,7 @@ ${lines}
       savePrompt();
       savePrefs();
       refreshFromChat();
+      updateGenerateButtonVisibility();
       renderTab();
     }
 
@@ -793,20 +1625,109 @@ ${lines}
 
       const row1 = el("div", { class: "ibs-form" });
 
+      // NEW: Pull Mode selector
       row1.append(
-        toggleRow("Auto-inject prompt", prefs.autoInjectPrompt, (v) => {
-          prefs.autoInjectPrompt = v;
-          savePrefs();
-        }, "Default is ON. Adds the InfoBoard instructions automatically."),
-
-        selectRow("Inject role", prefs.injectRole, [
-          { value: "system", label: "System (recommended)" },
-          { value: "user", label: "User (try if ignored)" }
+        selectRow("Pull Mode", prefs.pullMode, [
+          { value: "auto", label: "Auto (inject into generation)" },
+          { value: "manual", label: "Manual (click to generate)" }
         ], (v) => {
-          prefs.injectRole = v;
+          prefs.pullMode = v;
           savePrefs();
+          updateGenerateButtonVisibility();
+          renderGeneral(); // Re-render to show/hide relevant options
         }),
 
+        el("div", { class: "ibs-hint", style: "margin-bottom: 12px;" }, [
+          prefs.pullMode === "auto" 
+            ? "Auto mode injects InfoBoard prompt into every generation. The bot includes InfoBoard in its response."
+            : "Manual mode lets you click a button to generate InfoBoard separately, using any connection profile you choose."
+        ])
+      );
+
+      // Auto mode options
+      if (prefs.pullMode === "auto") {
+        row1.append(
+          toggleRow("Auto-inject prompt", prefs.autoInjectPrompt, (v) => {
+            prefs.autoInjectPrompt = v;
+            savePrefs();
+          }, "Adds InfoBoard instructions to each generation."),
+
+          selectRow("Inject role", prefs.injectRole, [
+            { value: "system", label: "System (recommended)" },
+            { value: "user", label: "User (try if ignored)" }
+          ], (v) => {
+            prefs.injectRole = v;
+            savePrefs();
+          })
+        );
+      }
+
+      // Manual mode options
+      if (prefs.pullMode === "manual") {
+        // Profile selector - show dropdown if profiles found, text input otherwise
+        if (availableProfiles.length > 0) {
+          const profileOptions = [
+            { value: "", label: "Use current profile" },
+            ...availableProfiles.map(p => ({ value: p, label: p }))
+          ];
+
+          row1.append(
+            selectRow("Connection Profile", prefs.manualProfile, profileOptions, (v) => {
+              prefs.manualProfile = v;
+              savePrefs();
+            })
+          );
+        } else {
+          // No profiles detected - show text input
+          row1.append(
+            textRow("Connection Profile (type name)", prefs.manualProfile || "", (v) => {
+              prefs.manualProfile = v.trim();
+              savePrefs();
+            }),
+            
+            el("div", { class: "ibs-hint", style: "margin-bottom: 8px; color: rgba(255,200,100,0.85);" }, [
+              "No profiles auto-detected. Leave empty to use current, or type a profile name exactly as it appears in SillyTavern."
+            ])
+          );
+        }
+
+        row1.append(
+          el("div", { class: "ibs-hint", style: "margin-bottom: 12px;" }, [
+            "Choose a different profile to generate InfoBoard (e.g., use a cheaper/faster model like DeepSeek)."
+          ]),
+
+          // History limit
+          selectRow("Include history", String(prefs.historyLimit), [
+            { value: "all", label: "All previous InfoBoards" },
+            { value: "20", label: "Last 20" },
+            { value: "10", label: "Last 10" },
+            { value: "5", label: "Last 5" },
+            { value: "0", label: "None (fresh each time)" }
+          ], (v) => {
+            prefs.historyLimit = v === "all" ? "all" : parseInt(v, 10);
+            savePrefs();
+          }),
+
+          el("div", { class: "ibs-hint", style: "margin-bottom: 12px;" }, [
+            "More history = better consistency. The LLM sees how values changed over time."
+          ])
+        );
+
+        // Refresh profiles button
+        const refreshBtn = el("button", { 
+          class: "ibs-btn",
+          onclick: async () => {
+            refreshBtn.textContent = "Loading...";
+            await fetchConnectionProfiles();
+            renderGeneral();
+          }
+        }, ["↻ Refresh profiles"]);
+
+        row1.append(refreshBtn);
+      }
+
+      // Common options
+      row1.append(
         toggleRow("Hide board in chat", prefs.hideInChat, (v) => {
           prefs.hideInChat = v;
           savePrefs();
@@ -819,7 +1740,7 @@ ${lines}
           refreshFromChat();
         }),
 
-        textRow("Extras section title (in case LLM gives more info", layoutConfig.extrasSectionTitle || "Extra", (v) => {
+        textRow("Extras section title", layoutConfig.extrasSectionTitle || "Extra", (v) => {
           layoutConfig.extrasSectionTitle = v || "Extra";
           saveLayout();
           refreshFromChat();
@@ -841,7 +1762,6 @@ ${lines}
 
       const wrap = el("div", { class: "ibs-layout-wrap" });
 
-      // Category dropdown
       const catRow = el("div", { class: "ibs-row" });
       const catLabel = el("div", { class: "ibs-field-label" }, ["Category"]);
       const catSelect = el("select", { class: "ibs-select" });
@@ -893,7 +1813,6 @@ ${lines}
 
       catRow.append(catLabel, catSelect, addCatBtn, renameCatBtn, delCatBtn);
 
-      // Infos list
       const sec = layoutConfig.sections[selectedCategoryIndex];
       const listTitle = el("div", { class: "ibs-detected-title" }, [`Infos in "${sec?.title || "Category"}"`]);
 
@@ -949,7 +1868,6 @@ ${lines}
         openFieldEditor(selectedCategoryIndex, -1, "add");
       }}, ["+ Add info"]);
 
-      // Detected keys helper
       const detected = el("div", { class: "ibs-detected" }, [
         el("div", { class: "ibs-detected-title" }, ["Detected keys (click to add as Text):"])
       ]);
@@ -985,7 +1903,6 @@ ${lines}
       }
     }
 
-    // Field editor (visual)
     function openFieldEditor(sectionIndex, fieldIndex, mode) {
       const sec = layoutConfig.sections[sectionIndex];
       if (!sec) return;
@@ -998,44 +1915,43 @@ ${lines}
       };
 
       const dialog = el("div", { class: "ibs-dialog-overlay" });
-dialog.style.cssText = `
-  position: fixed !important;
-  top: 0 !important;
-  left: 0 !important;
-  right: 0 !important;
-  bottom: 0 !important;
-  z-index: 2147483649 !important;
-  background: rgba(0,0,0,0.7) !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  padding: 20px !important;
-  width: 100vw !important;
-  height: 100vh !important;
-  overflow-y: auto !important;
-`;
+      dialog.style.cssText = `
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        z-index: 2147483649 !important;
+        background: rgba(0,0,0,0.7) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 20px !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        overflow-y: auto !important;
+      `;
 
-const dialogBox = el("div", { class: "ibs-dialog", onclick: (ev) => ev.stopPropagation() });
-dialogBox.style.cssText = `
-  position: relative !important;
-  z-index: 2147483650 !important;
-  max-height: 80vh !important;
-  max-width: 90vw !important;
-  width: 560px !important;
-  margin: auto !important;
-  overflow-y: auto !important;
-  -webkit-overflow-scrolling: touch !important;
-`;
+      const dialogBox = el("div", { class: "ibs-dialog", onclick: (ev) => ev.stopPropagation() });
+      dialogBox.style.cssText = `
+        position: relative !important;
+        z-index: 2147483650 !important;
+        max-height: 80vh !important;
+        max-width: 90vw !important;
+        width: 560px !important;
+        margin: auto !important;
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+      `;
 
-dialog.append(dialogBox);
-
+      dialog.append(dialogBox);
       dialog.addEventListener("click", () => dialog.remove());
 
       const box = dialogBox;
 
       const title = el("div", { class: "ibs-dialog-title" }, [mode === "edit" ? "Edit info" : "Add info"]);
       const hint = el("div", { class: "ibs-hint" }, [
-        "Key must match what the bot outputs (e.g. “Posture”). Display type controls how it looks in the sidebar."
+        'Key must match what the bot outputs (e.g. "Posture"). Display type controls how it looks in the sidebar.'
       ]);
 
       const keyInput = el("input", { class: "ibs-input", value: current.key || "", placeholder: "Key (e.g. Posture)" });
@@ -1068,7 +1984,6 @@ dialog.append(dialogBox);
 
         const newField = { key, label, display, subtle };
 
-        // Prevent duplicates by key within category
         const dup = (sec.fields || []).some((f, i) => String(f.key) === key && i !== fieldIndex);
         if (dup) {
           alert(`"${key}" already exists in this category.`);
@@ -1130,7 +2045,9 @@ dialog.append(dialogBox);
       ]);
 
       const preview = el("pre", { class: "ibs-preview" });
-      preview.textContent = getEffectiveInjectionPrompt();
+      preview.textContent = prefs.pullMode === "manual" 
+        ? buildManualPullPrompt() 
+        : getEffectiveInjectionPrompt();
 
       body.append(modeRow, explain);
 
@@ -1140,7 +2057,9 @@ dialog.append(dialogBox);
         area.addEventListener("input", () => {
           customPrompt = area.value;
           savePrompt();
-          preview.textContent = getEffectiveInjectionPrompt();
+          preview.textContent = prefs.pullMode === "manual" 
+            ? buildManualPullPrompt() 
+            : getEffectiveInjectionPrompt();
         });
 
         body.append(
@@ -1149,6 +2068,14 @@ dialog.append(dialogBox);
         );
       } else {
         body.append(labeled("Injection preview", preview));
+      }
+
+      // Info about history in manual mode
+      if (prefs.pullMode === "manual") {
+        const historyInfo = el("div", { class: "ibs-hint", style: "margin-top: 12px;" }, [
+          `In Manual mode, the prompt will include ${prefs.historyLimit === "all" ? "ALL" : prefs.historyLimit} previous InfoBoard(s) for context.`
+        ]);
+        body.append(historyInfo);
       }
 
       // Advanced (collapsed)
@@ -1279,29 +2206,44 @@ dialog.append(dialogBox);
 
     renderTab();
   }
+
   // =========================
-  // Injection via fetch wrapper
+  // Injection via fetch wrapper (Auto mode only)
   // =========================
   let fetchWrapped = false;
   let originalFetch = null;
 
   function shouldInterceptUrl(url) {
-    const u = String(url || "");
+    const u = String(url || "").toLowerCase();
+
+    // Must be an API path
+    if (!u.includes("/api/")) return false;
+
+    // Skip image generation endpoints
+    if (u.includes("/sdapi/") || u.includes("/comfyui") || u.includes("/diffusion") ||
+        u.includes("/dall-e") || u.includes("/dalle") || u.includes("/stability") ||
+        u.includes("/image-gen") || u.includes("/image_gen")) {
+      return false;
+    }
+
+    // Intercept text generation endpoints
     return (
-      u.includes("/api/") &&
-      (
-        u.includes("generate") ||
-        u.includes("chat") ||
-        u.includes("completion") ||
-        u.includes("openai") ||
-        u.includes("textgen") ||
-        u.includes("backends")
-      )
+      u.includes("generate") ||
+      u.includes("chat") ||
+      u.includes("completion") ||
+      u.includes("openai") ||
+      u.includes("textgen") ||
+      u.includes("backends")
     );
   }
 
   function injectIntoPayload(obj) {
-    if (!prefs.autoInjectPrompt) return { obj, injected: false };
+    // Only inject in Auto mode with auto-inject enabled
+    // Also skip if we're mid-generation (profile may be switched to infoboard API)
+    if (prefs.pullMode !== "auto" || !prefs.autoInjectPrompt || isGenerating) {
+      console.log("[IBS] Skipping injection - mode:", prefs.pullMode, "autoInject:", prefs.autoInjectPrompt, "isGenerating:", isGenerating);
+      return { obj, injected: false };
+    }
     if (!obj || typeof obj !== "object") return { obj, injected: false };
 
     const promptText = getEffectiveInjectionPrompt();
@@ -1357,6 +2299,8 @@ dialog.append(dialogBox);
           return originalFetch(input, init);
         }
 
+        console.log("[IBS] Intercepted fetch:", reqUrl);
+
         let body = init && init.body;
 
         if (!body && typeof input !== "string" && input instanceof Request) {
@@ -1383,6 +2327,7 @@ dialog.append(dialogBox);
         }
 
         const { obj: injectedObj, injected } = injectIntoPayload(parsed);
+        console.log("[IBS] Injection result:", injected);
 
         if (injected) {
           init = Object.assign({}, init || {});
@@ -1418,9 +2363,14 @@ dialog.append(dialogBox);
     installActiveCharacterWatcher();
     wrapFetchForInjection();
 
+    // Fetch profiles on boot (async, non-blocking)
+    fetchConnectionProfiles();
+
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) refreshFromChat();
     });
+
+    console.log("[IBS] InfoBoard Sidebar loaded. Mode:", prefs.pullMode);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);

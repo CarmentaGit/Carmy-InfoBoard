@@ -94,6 +94,11 @@
   color: rgba(255,255,255,0.55);
 }
 
+/* Mode indicator in subtitle */
+.ibs-subtitle.manual-mode {
+  color: rgba(74,163,255,0.85);
+}
+
 .ibs-actions {
   display: flex;
   gap: 6px;
@@ -109,10 +114,38 @@
 
   color: rgba(255,255,255,0.85);
   cursor: pointer;
+  
+  transition: all 150ms ease;
 }
 
 .ibs-mini:hover {
   border-color: rgba(255,255,255,0.16);
+}
+
+/* Generate button - special styling */
+.ibs-generate-btn {
+  background: rgba(74,163,255,0.15);
+  border-color: rgba(74,163,255,0.25);
+  color: rgba(74,163,255,0.95);
+}
+
+.ibs-generate-btn:hover {
+  background: rgba(74,163,255,0.25);
+  border-color: rgba(74,163,255,0.4);
+}
+
+.ibs-generate-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ibs-generate-btn.loading {
+  animation: ibs-pulse 1s ease-in-out infinite;
+}
+
+@keyframes ibs-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
 }
 
 /* Content */
@@ -237,6 +270,41 @@
   transition: width 200ms ease;
 }
 
+/* Toast notifications */
+.ibs-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 20px;
+  background: rgba(74,163,255,0.9);
+  color: white;
+  border-radius: 8px;
+  z-index: 99999;
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  animation: ibs-toast-in 200ms ease;
+}
+
+.ibs-toast.error {
+  background: rgba(255,80,80,0.9);
+}
+
+.ibs-toast.success {
+  background: rgba(80,200,120,0.9);
+}
+
+@keyframes ibs-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
 /* Mobile tweaks */
 @media (max-width: 520px) {
   #ibs-panel {
@@ -349,6 +417,12 @@
   padding: 9px 12px;
   cursor: pointer;
   font-size: 12px;
+  transition: all 150ms ease;
+}
+
+.ibs-btn:hover {
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(255,255,255,0.15);
 }
 
 .ibs-btn.primary {
@@ -356,14 +430,32 @@
   background: rgba(255,255,255,0.10);
 }
 
+.ibs-btn.primary:hover {
+  background: rgba(255,255,255,0.15);
+}
+
 .ibs-btn.danger {
   border-color: rgba(255,80,80,0.30);
+}
+
+.ibs-btn.danger:hover {
+  background: rgba(255,80,80,0.15);
+  border-color: rgba(255,80,80,0.45);
 }
 
 .ibs-hint {
   font-size: 12px;
   color: rgba(255,255,255,0.70);
   line-height: 1.45;
+}
+
+/* Mode description box */
+.ibs-mode-desc {
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(74,163,255,0.08);
+  border: 1px solid rgba(74,163,255,0.15);
+  margin-bottom: 12px;
 }
 
 .ibs-row {
@@ -687,4 +779,38 @@
 .ibs-slider-wrap {
   display: flex;
   align-items: center;
+}
+
+/* Section divider for settings */
+.ibs-section-divider {
+  height: 1px;
+  background: rgba(255,255,255,0.08);
+  margin: 16px 0;
+}
+
+/* Profile selector special styling */
+.ibs-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ibs-profile-row .ibs-select {
+  flex: 1;
+}
+
+.ibs-profile-row .ibs-btn {
+  padding: 9px 10px;
+  white-space: nowrap;
+}
+
+/* History info badge */
+.ibs-history-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(74,163,255,0.15);
+  color: rgba(74,163,255,0.9);
+  font-size: 10px;
+  margin-left: 6px;
 }

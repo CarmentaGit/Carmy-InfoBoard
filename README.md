@@ -2,14 +2,14 @@
 
 A lightweight, immersive **roleplay HUD** for SillyTavern.
 
-InfoBoard Sidebar extracts a structured `<info_board>` from the model’s replies and displays it as a clean, narrative-focused sidebar instead of cluttering the chat.  
+InfoBoard Sidebar extracts a structured `<info_board>` from the model's replies and displays it as a clean, narrative-focused sidebar instead of cluttering the chat.  
 Designed for **story-driven RP**, not stats or DnD.
 
 ---
 
 ## ✨ Features
 
-- Visual sidebar for RP state (“Current State” HUD)
+- Visual sidebar for RP state ("Current State" HUD)
 - Sections instead of raw lists:
   - Presence
   - Mind
@@ -22,7 +22,15 @@ Designed for **story-driven RP**, not stats or DnD.
 - Optional: auto-inject InfoBoard prompt (no preset editing required)
 - Mobile-safe layout (avoids bottom UI overlap)
 
-Everything runs **locally in your browser**. No external requests.
+### 🆕 New in v2.0.0
+
+- **Dual Pull Modes**: Choose between Auto (inject into generation) or Manual (generate on demand)
+- **Connection Profile Support**: Use a different LLM for InfoBoard generation (e.g., use Gemini for RP, DeepSeek for tracking)
+- **History Context**: Manual mode includes previous InfoBoards for better consistency
+- **Message Metadata Storage**: InfoBoard data persists with chat saves
+- **Improved Image Gen Compatibility**: No longer interferes with image generation requests
+
+Everything runs **locally in your browser**. No external requests (except to your chosen API).
 
 ---
 
@@ -37,14 +45,13 @@ Everything runs **locally in your browser**. No external requests.
 ### Mobile View
 ![Mobile View](https://i.ibb.co/hJXxq0Kb/mobile2.gif)
 
-
 ---
 
 ## 📦 Installation (Manual)
 
 1. Get the github link.
 2. Go to Silly Tavern > Extensions > Install Extension
-3. Past the link and install. Easy!
+3. Paste the link and install. Easy!
 
 ---
 
@@ -52,128 +59,104 @@ Everything runs **locally in your browser**. No external requests.
 
 - The sidebar appears on the right as **Current State**
 - Click `≡` to toggle visibility
-- Use the `⋯` menu to:
-  - Hide the InfoBoard from chat
-  - Strip `[brackets]` in sidebar (not suggested as it might interfere with date)
-  - Enable **Auto-inject InfoBoard prompt**
+- Use the `⚙` menu to configure settings
 
 ---
 
-### Auto-inject prompt
+## 🔄 Pull Modes
 
-When enabled, the extension automatically adds the InfoBoard instruction to outgoing generations, so you **don’t need to edit presets**. This is suggested as in the current status, extension might not be suitable for all InfoBoard prompts.
+InfoBoard now supports two pull modes:
 
-**Unless you want to use this, you can manually put the prompt from prompt.md into your own preset and turn this option off.**
+### Auto Mode (Default)
+- Injects InfoBoard prompt into every generation
+- The bot includes InfoBoard data in its response
+- Best for: Single-API setups, simple workflows
+
+### Manual Mode
+- Click the 📥 button to generate InfoBoard separately
+- Uses `generateQuietPrompt` for background generation
+- **Can use a different connection profile** than your main chat
+- Includes historical InfoBoards for consistency
+- Best for: Dual-API setups, using cheaper models for tracking
 
 ---
 
-## 🧠 How it works (short version)
+## 🔌 Connection Profiles (Manual Mode)
 
-- The model outputs an `<info_board>` inside a codeblock
-- The extension:
-  - Finds the latest valid InfoBoard
-  - Parses key/value lines
-  - Displays them in the sidebar
-  - Caches the state per character
-- Prompt injection (if enabled) is done by intercepting the outgoing request **locally**
+When using Manual mode, you can select a different connection profile:
+
+1. Go to Settings → General
+2. Set Pull Mode to **Manual**
+3. Choose a Connection Profile from the dropdown
+4. Click "↻ Refresh profiles" if your profiles don't appear
+
+**Example Use Case:**
+- Main chat: GPT-4 / Claude for quality roleplay
+- InfoBoard: DeepSeek / Gemini Flash for cheap, fast state tracking
+
+---
+
+## 📊 History Context
+
+In Manual mode, InfoBoard includes previous states in the generation prompt:
+
+- **All**: Include all previous InfoBoards (recommended for long context models)
+- **Last 20/10/5**: Limit to recent history
+- **None**: Fresh generation each time
+
+More history = better consistency. The LLM sees value progressions like:
+```
+Arousal: 10% → 15% → 20% → 25%
+```
+
+---
+
+## 💾 Message Metadata Storage
+
+InfoBoard data is now stored on each message's `extra.infoboard` field:
+
+```javascript
+message.extra.infoboard = {
+  data: { Posture: "...", Mood: "...", ... },
+  generatedAt: 1234567890,
+  profile: "DeepSeek-Chat"
+}
+```
+
+This means:
+- ✅ Data persists with chat saves
+- ✅ Survives page refresh
+- ✅ Tied to specific messages
+- ✅ Can be used for future features (time travel, trends)
 
 ---
 
 ## ⚙️ Settings & Customization
 
-InfoBoard Sidebar can be fully customized **without writing any code**.  
 All options are available under **Settings (⚙)** and grouped into three tabs.
-
----
 
 ### 🧩 General
 
-Controls how the InfoBoard behaves.
-
-![General](https://i.ibb.co/jjQtCQj/General.jpg)
-
-- **Auto-inject prompt**  
-  Automatically adds InfoBoard instructions to each generation.  
-  *(Recommended – ON by default)*
-
-- **Inject role**  
-  Chooses how the prompt is sent to the model.  
-  - **System** (recommended)  
-  - **User** (use if system prompts are ignored)
-
-- **Hide board in chat**  
-  Hides the `<info_board>` block from chat and shows it only in the sidebar.
-
-- **Strip [brackets] around values**  
-  Removes outer brackets for a cleaner look.
-
-- **Extras section title**  
-  Name of the fallback section used **when the model outputs additional info**.
-
----
+- **Pull Mode**: Auto (inject) or Manual (on-demand)
+- **Connection Profile** (Manual only): Choose API for InfoBoard generation
+- **Include History** (Manual only): How many previous InfoBoards to include
+- **Auto-inject prompt** (Auto only): Add instructions automatically
+- **Inject role**: System or User
+- **Hide board in chat**: Show only in sidebar
+- **Strip [brackets]**: Remove outer brackets
+- **Panel opacity**: Adjust transparency
 
 ### 🧱 Layout
 
-Controls **what appears in the sidebar**.
-
-![Layout](https://i.ibb.co/HDqJmGNG/Layout.jpg)
-
-- **Categories**  
-  Visual sections such as *Presence*, *Mind*, *Connection*, or *World*.  
-  You can add, rename, delete, and reorder them.
-
-- **Infos**  
-  Individual data points inside categories (e.g. *Posture*, *Mood*, *Arousal*).  
-  Infos can be added, edited, reordered, or removed.
-
-- **Detected keys**  
-  Shows keys detected from the model’s output.  
-  Click one to instantly add it to the current category.
-
----
-
-### ➕ Add / Edit Info
-
-When adding or editing an Info:
-
-![Add Info](https://i.ibb.co/HTx8qrST/Add-info.jpg)
-
-- **Key**  
-  Must match what the model outputs (e.g. `Posture`, `Mood`).
-
-- **Label (optional)**  
-  Display name shown in the sidebar (cosmetic only).
-
-- **Display type**  
-  Controls how the info is shown:
-  - **Text**
-  - **Text + Bar**
-  - **Bar only**
-  - **Chips** (comma-separated values)
-  - **Monospace (thought)**
-
-- **Subtle text**  
-  Displays the value in a softer color.
-
----
+- **Categories**: Visual sections (Presence, Mind, etc.)
+- **Infos**: Individual data points (Posture, Mood, etc.)
+- **Detected keys**: Quick-add from model output
 
 ### 🧠 Prompt
 
-- **Auto (generated from layout)**  
-  Builds the injected prompt automatically from your Layout.
-
-- **Custom prompt**  
-  Lets advanced users write their own prompt manually.
-
-A live **Injection Preview** shows exactly what will be sent to the model.
-
----
-
-### 📌 About “Extra”
-
-If the model outputs keys that aren’t defined in your layout, they appear in the **Extras** section instead of being discarded.  
-This helps prevent information loss and makes it easy to discover new infos to add later.
-
+- **Auto mode**: Generated from your Layout
+- **Custom mode**: Write your own prompt
+- **Preview**: See exactly what will be sent
 
 ---
 
@@ -188,13 +171,52 @@ You can scroll the full board without it being hidden.
 
 ---
 
+## 🔧 Troubleshooting
+
+### Manual mode: "SillyTavern API not available"
+- Make sure you're running a recent version of SillyTavern
+- The extension needs access to `SillyTavern.getContext()`
+
+### Profiles not showing up
+- Click "↻ Refresh profiles" in settings
+- Make sure you have connection profiles configured in SillyTavern
+
+### InfoBoard not generating in Manual mode
+- Check browser console for errors
+- Ensure your selected profile is properly configured
+- Try with "Use current profile" first
+
+### Image generation being affected
+- v2.0.0 fixes this! The fetch wrapper now skips image generation endpoints
+
+---
+
 ## ⚠️ Notes
 
 - This is a **third-party extension**
-- SillyTavern does **not** auto-update it, I will. So I'm open to suggestions and feedbacks
+- SillyTavern does **not** auto-update it
+- Open to suggestions and feedback!
+
+---
+
+## 📝 Changelog
+
+### v2.0.0
+- Added Manual pull mode with `generateQuietPrompt`
+- Added connection profile selection
+- Added history context inclusion
+- Added message metadata storage
+- Fixed image generation interference
+- Updated settings UI with mode-specific options
+
+### v1.0.0
+- Initial release
+- Auto-inject mode
+- Per-character caching
+- Mobile-safe layout
 
 ---
 
 ## 💙 Credits
 
-Created by **Carmenta** with the help of my beloved ChatGPT. So code might be bloated, oh well.
+Created by **Carmenta** with help from Claude AI.
